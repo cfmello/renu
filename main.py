@@ -1,12 +1,13 @@
-from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi import FastAPI, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 from typing import List
-
-import jwt
-import models, schemas, database, auth_utils
 from database import engine, get_db
+import jwt, models, schemas, database, auth_utils, logging
+
 
 # Cria as tabelas no banco de dados
 models.Base.metadata.create_all(bind=engine)
@@ -15,6 +16,37 @@ models.Base.metadata.create_all(bind=engine)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 
 app = FastAPI(title="RENU - Secure Multi-User API")
+
+
+# Configuração básica de logs (isso aparecerá no seu terminal Ubuntu)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Handler para erros inesperados (500)
+@app.exception_handler(Exception)
+async def gerenciar_erro_inesperado(request: Request, exc: Exception):
+    # Aqui guardamos o erro "feio" no log para você ver no terminal
+    logger.error(f"Erro inesperado: {str(exc)}", exc_info=True)
+    
+    # E retornamos uma mensagem limpa para o usuário
+    return JSONResponse(
+        status_code=500,
+        content={
+            "erro": "Erro Interno",
+            "mensagem": "Ops, o servidor apresentou um erro. Por favor, tente novamente mais tarde."
+        }
+    )
+
+# Handler para erros de validação (422) - Quando o JSON enviado está errado
+@app.exception_handler(422)
+async def gerenciar_erro_validacao(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=422,
+        content={
+            "erro": "Dados Inválidos",
+            "mensagem": "Os dados enviados não estão no formato correto. Verifique os campos e tente novamente."
+        }
+    )
 
 # --- DEPENDÊNCIA: OBTÉM O USUÁRIO LOGADO ---
 def get_current_user(db: Session = Depends(get_db), token: str = Depends(oauth2_scheme)):
@@ -76,6 +108,27 @@ def criar_categoria(cat: schemas.CategoriaCreate, db: Session = Depends(get_db),
 @app.get("/categorias/")
 def listar_categorias(db: Session = Depends(get_db), current_user: models.UserDB = Depends(get_current_user)):
     return db.query(models.CategoriaDB).filter(models.CategoriaDB.dono_id == current_user.id).all()
+
+@app.delete("/categorias/{cat_id}")
+def eliminar_categoria(cat_id: int, db: Session = Depends(get_db), current_user: models.UserDB = Depends(get_current_user)):
+    cat = db.query(models.CategoriaDB).filter(
+        models.CategoriaDB.id == cat_id, 
+        models.CategoriaDB.dono_id == current_user.id
+    ).first()
+    
+    if not cat:
+        raise HTTPException(status_code=404, detail="Categoria não encontrada.")
+
+    try:
+        db.delete(cat)
+        db.commit()
+        return {"message": "Categoria removida!"}
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=400, 
+            detail="Não é possível apagar uma categoria que ainda possui itens vinculados."
+        )
 
 # --- ROTAS DE ITENS ---
 

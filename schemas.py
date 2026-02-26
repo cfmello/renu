@@ -1,5 +1,5 @@
-from pydantic import BaseModel, model_validator, EmailStr
-from datetime import datetime
+from pydantic import BaseModel, model_validator, EmailStr, Field
+from datetime import datetime, timezone
 from typing import Optional
 
 class UserCreate(BaseModel):
@@ -17,9 +17,18 @@ class ItemCreate(BaseModel):
     categoria_id: int
 
     @model_validator(mode='after')
-    def validar_campos(self) -> 'ItemCreate':
-        if self.tipo_controle == "PRAZO" and self.prazo_dias is None:
-            raise ValueError("Informe 'prazo_dias'.")
-        if self.tipo_controle == "VALIDADE" and self.data_validade_fixa is None:
-            raise ValueError("Informe 'data_validade_fixa'.")
-        return self
+        def validar_campos(self) -> 'ItemCreate':
+            agora = datetime.now(timezone.utc)
+            
+            if self.tipo_controle == "PRAZO":
+                if self.prazo_dias is None:
+                    raise ValueError("Para o tipo PRAZO, informe os dias.")
+            
+            elif self.tipo_controle == "VALIDADE":
+                if self.data_validade_fixa is None:
+                    raise ValueError("Para o tipo VALIDADE, informe a data.")
+                # Impede datas retroativas (com margem de erro de 1 min)
+                if self.data_validade_fixa.replace(tzinfo=timezone.utc) < agora:
+                    raise ValueError("A data de validade não pode estar no passado.")
+            
+            return self
